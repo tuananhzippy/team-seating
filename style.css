@@ -1,0 +1,217 @@
+:root {
+    --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --glass-bg: rgba(255, 255, 255, 0.7);
+    --glass-border: rgba(0, 0, 0, 0.1);
+    --glass-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1);
+    --text-primary: #1a1a2e;
+    --text-secondary: #4a5568;
+    --bg-primary: #f0f2f5;
+}
+
+body {
+    font-family: 'Inter', sans-serif;
+    background: linear-gradient(45deg, #fdfbfb, #ebedee, #f0f2f5);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+    height: 100vh;
+    overflow: hidden;
+    color: var(--text-primary);
+}
+
+@keyframes gradientBG {
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.glass-panel {
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-right: 1px solid var(--glass-border);
+}
+
+.custom-btn {
+    background: var(--primary-gradient);
+    border: none;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.custom-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+}
+
+.seat-map-container {
+    perspective: 1000px;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.seat-grid {
+    display: grid;
+    gap: 12px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 20px;
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    transition: all 0.5s ease;
+    /* Dimensions handled in JS */
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    align-content: center;
+    justify-content: center;
+}
+
+.seat-item {
+    /* Fixed aspect ratio or min-size */
+    min-width: 80px;
+    min-height: 60px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.6);
+    border: 1px solid rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.seat-number-badge {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 0.6rem;
+    opacity: 0.5;
+    font-weight: bold;
+    color: var(--text-secondary);
+}
+
+.special-zone {
+    background: rgba(255, 255, 255, 0.5);
+    border: 2px dashed rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.cursor-pointer {
+    cursor: pointer;
+}
+
+.cursor-pointer:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+.seat-item:hover {
+    transform: scale(1.05);
+    background: rgba(255, 255, 255, 0.9);
+    z-index: 10;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.seat-item .member-name {
+    font-weight: 600;
+    text-align: center;
+    line-height: 1.2;
+    margin-bottom: 4px;
+    pointer-events: none;
+    color: var(--text-primary);
+}
+
+.seat-item .member-role {
+    font-size: 0.7rem;
+    opacity: 0.7;
+    pointer-events: none;
+    color: var(--text-secondary);
+}
+
+.team-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    position: absolute;
+    top: 8px;
+    right: 8px;
+}
+
+/* Team Colors - We will generate these dynamically or use CSS vars later, 
+   but here are some presets for now */
+.team-color-system {
+    background-color: #ff6b6b;
+    border-color: #ff6b6b;
+}
+
+.team-color-ecommerce {
+    background-color: #4ecdc4;
+    border-color: #4ecdc4;
+}
+
+.team-color-design {
+    background-color: #ffe66d;
+    border-color: #ffe66d;
+}
+
+/* Text needs to be dark for this */
+.team-color-pod {
+    background-color: #1a535c;
+    border-color: #1a535c;
+}
+
+.team-color-tester {
+    background-color: #ff9f1c;
+    border-color: #ff9f1c;
+}
+
+.team-color-mobile {
+    background-color: #ff006e;
+    border-color: #ff006e;
+}
+
+/* Override text color for bright backgrounds if needed */
+.text-dark-force {
+    color: #1a1a2e !important;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.05);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+}
+
+.empty-seat {
+    opacity: 0.6;
+    border-style: dashed;
+    background: rgba(0, 0, 0, 0.02);
+}

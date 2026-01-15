@@ -1,0 +1,29 @@
+# Tasks
+
+- [x] Project Setup <!-- id: 0 -->
+    - [x] Create index.html with Bootstrap 5 <!-- id: 1 -->
+    - [x] Setup assets (style.css, script.js) <!-- id: 2 -->
+- [/] Core Logic <!-- id: 3 -->
+    - [x] Define data structure (Members, Groups) in JS <!-- id: 4 -->
+    - [ ] Implement randomization algorithm with proximity grouping <!-- id: 5 -->
+- [ ] UI Implementation <!-- id: 6 -->
+    - [x] Build layout with Bootstrap Grid <!-- id: 7 -->
+    - [x] Implement team management sidebar <!-- id: 8 -->
+    - [x] Render seat map using JS <!-- id: 9 -->
+    - [x] Implement Custom Layout (Coordinates Map) <!-- id: 19 -->
+    - [x] Add Kitchen and specific styling <!-- id: 20 -->
+    - [x] Add animations and glassmorphism styles <!-- id: 10 -->
+    - [x] Add Import/Export buttons <!-- id: 14 -->
+    - [x] Implement Collapsible Team Members List <!-- id: 22 -->
+- [/] Data Features <!-- id: 15 -->
+    - [x] Create members.json from real data <!-- id: 23 -->
+    - [x] Refactor app to fetch members.json <!-- id: 24 -->
+    - [x] Implement Local Storage persistence <!-- id: 16 -->
+    - [x] Implement JSON Export <!-- id: 17 -->
+    - [x] Implement JSON Import <!-- id: 18 -->
+- [x] UI Reskin <!-- id: 25 -->
+    - [x] Switch to Light Theme (CSS Variables & Bootstrap classes) <!-- id: 26 -->
+    - [x] Update Seat Map styling for contrast <!-- id: 27 -->
+- [ ] Verification <!-- id: 11 -->
+    - [ ] Verify grouping logic <!-- id: 12 -->
+    - [ ] Browser visual test <!-- id: 13 -->
