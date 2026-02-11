@@ -1,56 +1,101 @@
-import { MEMBERS, TEAMS } from './data.js';
+import { TEAMS } from './data.js';
 import { randomizeSeats } from './engine.js';
+import { SEAT_LAYOUT, SPECIAL_ZONES } from './layout.js';
 
-// Config
+// ========================
+// CONFIG
+// ========================
 const STORAGE_KEY = 'seat_randomizer_data';
 
-// DOM Elements
+// ========================
+// DOM ELEMENTS
+// ========================
 const seatMapEl = document.getElementById('seat-map');
 const btnRandom = document.getElementById('btn-random');
 const teamSummaryEl = document.getElementById('team-summary');
 const totalCountEl = document.getElementById('total-count');
 
-// Data Features DOM
-const btnExport = document.getElementById('btn-export');
-const btnImportTrigger = document.getElementById('btn-import-trigger');
-const fileImportInput = document.getElementById('file-import');
+// Manage Members
+const btnManageMembers = document.getElementById('btn-manage-members');
+const btnAddMember = document.getElementById('btn-add-member');
+const btnSaveMember = document.getElementById('btn-save-member');
+const btnConfirmDelete = document.getElementById('btn-confirm-delete');
+const membersTableBody = document.getElementById('members-table-body');
+const manageTotalCount = document.getElementById('manage-total-count');
+const searchMembersInput = document.getElementById('search-members');
+const filterTeamSelect = document.getElementById('filter-team');
 
-// State
-let currentMembers = [...MEMBERS];
+// Member Form
+const memberIdInput = document.getElementById('member-id');
+const memberNameInput = document.getElementById('member-name');
+const memberTeamSelect = document.getElementById('member-team');
+const memberModalLabel = document.getElementById('memberModalLabel');
+const deleteMemberNameEl = document.getElementById('delete-member-name');
 
-// Initialize
-// Initialize
+// Modal overlays
+const memberModalOverlay = document.getElementById('memberModalOverlay');
+const manageMembersOverlay = document.getElementById('manageMembersOverlay');
+const deleteConfirmOverlay = document.getElementById('deleteConfirmOverlay');
+
+// Close buttons
+const btnCloseMemberModal = document.getElementById('btn-close-member-modal');
+const btnCancelMember = document.getElementById('btn-cancel-member');
+const btnCloseManageModal = document.getElementById('btn-close-manage-modal');
+const btnCloseManage = document.getElementById('btn-close-manage');
+const btnCloseDeleteModal = document.getElementById('btn-close-delete-modal');
+const btnCancelDelete = document.getElementById('btn-cancel-delete');
+
+// ========================
+// STATE
+// ========================
+let currentMembers = [];
+let deletingMemberId = null;
+
+// ========================
+// MODAL HELPERS (vanilla)
+// ========================
+function openModal(overlay) {
+    overlay.classList.add('active');
+}
+
+function closeModal(overlay) {
+    overlay.classList.remove('active');
+}
+
+function setupModalClose(overlay, ...closeBtns) {
+    // Close on overlay click (outside modal)
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) closeModal(overlay);
+    });
+    // Close on buttons
+    closeBtns.forEach(btn => {
+        if (btn) btn.addEventListener('click', () => closeModal(overlay));
+    });
+}
+
+// ========================
+// INITIALIZATION
+// ========================
 async function init() {
-    // Try to load from local storage first, if not exist, fetch from JSON
-    const hasLocalParams = localStorage.getItem(STORAGE_KEY);
+    // Populate team selects
+    populateTeamSelects();
 
-    // We will favor the members.json source if storage is empty
-    // OR if we want to force valid initial state, but typically storage wins if present.
-    // However, if storage has OLD data structure (e.g. from previous random generator),
-    // it might be safer to verify or allow reset.
-    // For now: Storage wins. If user wants factory reset -> they use button (which we need to handle).
+    // Setup modal close handlers
+    setupModalClose(memberModalOverlay, btnCloseMemberModal, btnCancelMember);
+    setupModalClose(manageMembersOverlay, btnCloseManageModal, btnCloseManage);
+    setupModalClose(deleteConfirmOverlay, btnCloseDeleteModal, btnCancelDelete);
 
-    if (hasLocalParams) {
-        loadData();
-    } else {
+    // Load data: localStorage first, then fallback to members.json
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
         try {
-            const response = await fetch('members.json');
-            const data = await response.json();
-            // Map colors from TEAMS config
-            currentMembers = data.map(m => {
-                // Find team color
-                const teamKey = Object.keys(TEAMS).find(key => TEAMS[key].id === m.teamId);
-                const color = teamKey ? TEAMS[teamKey].color : '#999';
-                return { ...m, teamColor: color };
-            });
-
-            // Sort by Team ID to ensure grouped initial state
-            currentMembers.sort((a, b) => a.teamId.localeCompare(b.teamId));
-
-            saveData(); // Save to local storage for persistence
+            currentMembers = JSON.parse(saved);
         } catch (e) {
-            console.error('Failed to load members.json', e);
+            console.error('Failed to parse localStorage data', e);
+            await loadFromJson();
         }
+    } else {
+        await loadFromJson();
     }
 
     renderSidebar();
@@ -58,41 +103,83 @@ async function init() {
 
     // Event Listeners
     btnRandom.addEventListener('click', handleRandomize);
+    btnManageMembers.addEventListener('click', openManageModal);
+    btnAddMember.addEventListener('click', openAddMemberModal);
+    btnSaveMember.addEventListener('click', handleSaveMember);
+    btnConfirmDelete.addEventListener('click', handleConfirmDelete);
+    searchMembersInput.addEventListener('input', renderMembersTable);
+    filterTeamSelect.addEventListener('change', renderMembersTable);
 
-    // Data Listeners
-    if (btnExport) btnExport.addEventListener('click', handleExport);
-    if (btnImportTrigger) btnImportTrigger.addEventListener('click', () => fileImportInput.click());
-    if (fileImportInput) fileImportInput.addEventListener('change', handleImport);
+    // ESC to close modals
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeModal(memberModalOverlay);
+            closeModal(manageMembersOverlay);
+            closeModal(deleteConfirmOverlay);
+        }
+        // Enter to save in member modal
+        if (e.key === 'Enter' && memberModalOverlay.classList.contains('active')) {
+            e.preventDefault();
+            handleSaveMember();
+        }
+    });
 }
 
-
-
-
-
-
-
-function loadData() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-        try {
-            currentMembers = JSON.parse(saved);
-        } catch (e) {
-            console.error('Failed to load storage', e);
-            currentMembers = [...MEMBERS];
-        }
-    } else {
-        currentMembers = [...MEMBERS];
+async function loadFromJson() {
+    try {
+        const response = await fetch('members.json');
+        const data = await response.json();
+        currentMembers = data.map(m => {
+            const teamKey = Object.keys(TEAMS).find(key => TEAMS[key].id === m.teamId);
+            const color = teamKey ? TEAMS[teamKey].color : '#999';
+            return { ...m, teamColor: color };
+        });
+        currentMembers.sort((a, b) => a.teamId.localeCompare(b.teamId));
+        saveData();
+    } catch (e) {
+        console.error('Failed to load members.json', e);
     }
 }
 
+function populateTeamSelects() {
+    const teamsArray = Object.values(TEAMS);
+
+    memberTeamSelect.innerHTML = teamsArray.map(t =>
+        `<option value="${t.id}">${t.name}</option>`
+    ).join('');
+
+    filterTeamSelect.innerHTML = '<option value="">All Teams</option>' +
+        teamsArray.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
+}
+
+// ========================
+// DATA PERSISTENCE
+// ========================
 function saveData() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(currentMembers));
 }
 
+function getNextId() {
+    if (currentMembers.length === 0) return 1;
+    return Math.max(...currentMembers.map(m => m.id)) + 1;
+}
+
+function getTeamColor(teamId) {
+    const teamKey = Object.keys(TEAMS).find(key => TEAMS[key].id === teamId);
+    return teamKey ? TEAMS[teamKey].color : '#999';
+}
+
+function getTeamName(teamId) {
+    const teamKey = Object.keys(TEAMS).find(key => TEAMS[key].id === teamId);
+    return teamKey ? TEAMS[teamKey].name : 'Unknown';
+}
+
+// ========================
+// SIDEBAR RENDER
+// ========================
 function renderSidebar() {
     totalCountEl.textContent = currentMembers.length;
 
-    // Group members by team for displaying
     const teamMembers = {};
     currentMembers.forEach(m => {
         if (!teamMembers[m.teamId]) teamMembers[m.teamId] = [];
@@ -100,31 +187,24 @@ function renderSidebar() {
     });
 
     let html = '';
-    const sortedTeamKeys = Object.keys(TEAMS).filter(key => teamMembers[TEAMS[key].id] && teamMembers[TEAMS[key].id].length > 0);
-
-    // Also include empty teams if needed, but let's stick to existing logic of TEAMS config
     Object.values(TEAMS).forEach(team => {
         const members = teamMembers[team.id] || [];
         const count = members.length;
 
-        // Members list HTML
         const membersHtml = members.map(m => `
-            <div class="d-flex align-items-center mb-2 ms-4">
-                <small class="text-secondary">${m.name}</small>
-            </div>
+            <div class="team-member-item">${m.name}</div>
         `).join('');
 
         html += `
-            <div class="mb-3 rounded border border-dark-subtle" style="background: rgba(255,255,255,0.4); border: 1px solid rgba(0,0,0,0.05);">
-                <div class="d-flex align-items-center justify-content-between p-2 cursor-pointer" 
-                     onclick="document.getElementById('team-list-${team.id}').classList.toggle('d-none');">
-                    <div class="d-flex align-items-center">
-                        <div class="rounded-circle me-3" style="width: 12px; height: 12px; background-color: ${team.color}; box-shadow: 0 0 5px ${team.color}"></div>
-                        <span class="fw-medium">${team.name}</span>
+            <div class="team-card">
+                <div class="team-card-header" data-team="${team.id}">
+                    <div class="team-card-left">
+                        <div class="team-color-dot" style="background-color: ${team.color}; box-shadow: 0 0 6px ${team.color}"></div>
+                        <span class="team-card-name">${team.name}</span>
                     </div>
-                    <span class="badge bg-secondary text-white">${count}</span>
+                    <span class="team-card-count">${count}</span>
                 </div>
-                <div id="team-list-${team.id}" class="d-none pb-2 border-top border-secondary-subtle pt-2 transition-all">
+                <div class="team-card-body" id="team-list-${team.id}">
                     ${membersHtml}
                 </div>
             </div>
@@ -132,58 +212,51 @@ function renderSidebar() {
     });
 
     teamSummaryEl.innerHTML = html;
+
+    // Attach toggle listeners
+    document.querySelectorAll('.team-card-header').forEach(header => {
+        header.addEventListener('click', () => {
+            const teamId = header.dataset.team;
+            const body = document.getElementById(`team-list-${teamId}`);
+            body.classList.toggle('open');
+        });
+    });
 }
 
-import { SEAT_LAYOUT, SPECIAL_ZONES } from './layout.js';
-
+// ========================
+// SEAT MAP RENDER
+// ========================
 function renderSeatMap(memberList) {
     seatMapEl.innerHTML = '';
 
-    // We need to map members to the layout order. 
-    // memberList is a flat array already randomized.
-    // We will simple take memberList[i] and place it in SEAT_LAYOUT[i] (sorted by id).
-    // First, let's sort layout by ID to match the concept of "Position 1, Position 2..."
-    // actually, the randomizer fills a linear array. 
-    // If the randomizer result has 40 people, they go into slots 1..40.
-
-    // Let's ensure SEAT_LAYOUT is sorted by ID 1..48
     const sortedLayout = [...SEAT_LAYOUT].sort((a, b) => a.id - b.id);
 
     const gridEl = document.createElement('div');
     gridEl.className = 'seat-grid custom-layout';
-    // Max cols is 13 based on layout.js
-    gridEl.style.gridTemplateColumns = `repeat(13, 1fr)`;
-    gridEl.style.gridTemplateRows = `repeat(8, 1fr)`;
+    gridEl.style.gridTemplateColumns = 'repeat(13, 1fr)';
+    gridEl.style.gridTemplateRows = 'repeat(8, 1fr)';
 
-    // Render Seats
     sortedLayout.forEach((seat, index) => {
-        const member = memberList[index]; // simple 1-to-1 mapping
+        const member = memberList[index];
 
         const seatItem = document.createElement('div');
         seatItem.className = 'seat-item';
         seatItem.style.gridColumn = seat.col;
         seatItem.style.gridRow = seat.row;
-
-        // Stagger animation
         seatItem.style.animation = `fadeIn 0.3s ease forwards ${index * 0.01}s`;
         seatItem.style.opacity = '0';
 
-        // Add Seat Number Badge
         const seatNumBadge = `<div class="seat-number-badge">${seat.label}</div>`;
 
         if (member) {
             seatItem.style.borderColor = member.teamColor;
-            // Lighter gradient for seats
             seatItem.style.background = `linear-gradient(135deg, #ffffff, ${member.teamColor}11)`;
-
-            // Always use dark text for light theme, unless background is very dark (which it isn't here)
-            const textColorClass = 'text-dark';
 
             seatItem.innerHTML = `
                 ${seatNumBadge}
-                <div class="team-dot" style="background-color: ${member.teamColor};box-shadow: 0 0 5px ${member.teamColor}"></div>
-                <div class="member-name ${textColorClass}" style="font-size: 0.75rem;">${member.name}</div>
-                <div class="member-role text-secondary">${member.teamName}</div>
+                <div class="team-dot" style="background-color: ${member.teamColor}; box-shadow: 0 0 5px ${member.teamColor}"></div>
+                <div class="member-name" style="font-size: 0.75rem;">${member.name}</div>
+                <div class="member-role">${member.teamName}</div>
             `;
         } else {
             seatItem.classList.add('empty-seat');
@@ -193,89 +266,239 @@ function renderSeatMap(memberList) {
         gridEl.appendChild(seatItem);
     });
 
-    // Render Special Zones (Kitchen)
     SPECIAL_ZONES.forEach(zone => {
         const zoneEl = document.createElement('div');
         zoneEl.className = 'special-zone';
         zoneEl.style.gridColumn = `${zone.colStart} / ${zone.colEnd}`;
         zoneEl.style.gridRow = `${zone.rowStart} / ${zone.rowEnd}`;
-        zoneEl.innerHTML = `<span class="zone-label"><i class="bi bi-cup-hot me-2"></i>${zone.name}</span>`;
+        zoneEl.innerHTML = `<span class="zone-label">☕ ${zone.name}</span>`;
         gridEl.appendChild(zoneEl);
     });
-
-    // Add global keyframes if not exists
-    if (!document.getElementById('anim-styles')) {
-        const style = document.createElement('style');
-        style.id = 'anim-styles';
-        style.innerHTML = `
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(10px) scale(0.9); }
-                to { opacity: 1; transform: translateY(0) scale(1); }
-            }
-        `;
-        document.head.appendChild(style);
-    }
 
     seatMapEl.appendChild(gridEl);
 }
 
+// ========================
+// RANDOMIZE
+// ========================
 function handleRandomize() {
-    // Add a small delay or loading state if needed for effect
     btnRandom.disabled = true;
-    btnRandom.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span> Mixing...';
+    const origText = btnRandom.textContent;
+    btnRandom.textContent = '⏳ Mixing...';
 
     setTimeout(() => {
         const randomizedList = randomizeSeats(currentMembers);
         renderSeatMap(randomizedList);
         btnRandom.disabled = false;
-        btnRandom.innerHTML = 'Randomize Seats ✨';
-    }, 600); // Artificial delay to feel like "work" is being done
+        btnRandom.textContent = origText;
+    }, 600);
 }
 
-
-
-function handleExport() {
-    const dataStr = JSON.stringify(currentMembers, null, 2);
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `seating-data-${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+// ========================
+// MANAGE MEMBERS MODAL
+// ========================
+function openManageModal() {
+    renderMembersTable();
+    openModal(manageMembersOverlay);
 }
 
-function handleImport(event) {
-    const file = event.target.files[0];
-    if (!file) return;
+function renderMembersTable() {
+    const searchTerm = searchMembersInput.value.toLowerCase().trim();
+    const filterTeam = filterTeamSelect.value;
 
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        try {
-            const json = JSON.parse(e.target.result);
-            if (Array.isArray(json)) {
-                currentMembers = json;
-                saveData(); // Persist
-                renderSidebar(); // Update counts
-                renderSeatMap(currentMembers); // Update map
-                alert('Import successful!');
-            } else {
-                alert('Invalid JSON format: Expected an array.');
-            }
-        } catch (error) {
-            console.error(error);
-            alert('Error parsing JSON file.');
+    let filtered = currentMembers;
+
+    if (searchTerm) {
+        filtered = filtered.filter(m => m.name.toLowerCase().includes(searchTerm));
+    }
+    if (filterTeam) {
+        filtered = filtered.filter(m => m.teamId === filterTeam);
+    }
+
+    manageTotalCount.textContent = filtered.length;
+
+    if (filtered.length === 0) {
+        membersTableBody.innerHTML = `
+            <tr>
+                <td colspan="4" class="empty-table-msg">🔍 No members found</td>
+            </tr>
+        `;
+        return;
+    }
+
+    membersTableBody.innerHTML = filtered.map((m, i) => {
+        const teamColor = m.teamColor || getTeamColor(m.teamId);
+        return `
+            <tr>
+                <td class="text-muted">${i + 1}</td>
+                <td>
+                    <div class="cell-name">
+                        <div class="cell-dot" style="background-color: ${teamColor}"></div>
+                        <span style="font-weight:500">${m.name}</span>
+                    </div>
+                </td>
+                <td>
+                    <span class="cell-badge" style="background:${teamColor}15; color:${teamColor}; border-color:${teamColor}40;">
+                        ${m.teamName}
+                    </span>
+                </td>
+                <td>
+                    <div class="cell-actions">
+                        <button class="btn-icon btn-icon-edit btn-edit-member" data-id="${m.id}" title="Edit">✏️</button>
+                        <button class="btn-icon btn-icon-delete btn-delete-member" data-id="${m.id}" title="Delete"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></button>
+                    </div>
+                </td>
+            </tr>
+        `;
+    }).join('');
+
+    // Attach event listeners
+    document.querySelectorAll('.btn-edit-member').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const id = parseInt(e.currentTarget.dataset.id);
+            openEditMemberModal(id);
+        });
+    });
+
+    document.querySelectorAll('.btn-delete-member').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const id = parseInt(e.currentTarget.dataset.id);
+            openDeleteConfirm(id);
+        });
+    });
+}
+
+// ========================
+// ADD / EDIT MEMBER
+// ========================
+function openAddMemberModal() {
+    memberIdInput.value = '';
+    memberNameInput.value = '';
+    memberTeamSelect.value = Object.values(TEAMS)[0].id;
+    memberModalLabel.textContent = '➕ Add Member';
+    memberNameInput.classList.remove('is-invalid');
+    openModal(memberModalOverlay);
+    setTimeout(() => memberNameInput.focus(), 100);
+}
+
+function openEditMemberModal(id) {
+    const member = currentMembers.find(m => m.id === id);
+    if (!member) return;
+
+    memberIdInput.value = member.id;
+    memberNameInput.value = member.name;
+    memberTeamSelect.value = member.teamId;
+    memberModalLabel.textContent = '✏️ Edit Member';
+    memberNameInput.classList.remove('is-invalid');
+    openModal(memberModalOverlay);
+    setTimeout(() => memberNameInput.focus(), 100);
+}
+
+function handleSaveMember() {
+    const name = memberNameInput.value.trim();
+    const teamId = memberTeamSelect.value;
+    const editId = memberIdInput.value;
+
+    if (!name) {
+        memberNameInput.classList.add('is-invalid');
+        memberNameInput.focus();
+        return;
+    }
+    memberNameInput.classList.remove('is-invalid');
+
+    const teamColor = getTeamColor(teamId);
+    const teamName = getTeamName(teamId);
+
+    if (editId) {
+        // UPDATE
+        const idx = currentMembers.findIndex(m => m.id === parseInt(editId));
+        if (idx !== -1) {
+            currentMembers[idx] = {
+                ...currentMembers[idx],
+                name,
+                teamId,
+                teamName,
+                teamColor
+            };
         }
-        // Reset input so same file can be selected again if needed
-        event.target.value = '';
-    };
-    reader.readAsText(file);
+    } else {
+        // CREATE
+        const newMember = {
+            id: getNextId(),
+            name,
+            teamId,
+            teamName,
+            teamColor
+        };
+        currentMembers.push(newMember);
+    }
+
+    saveData();
+    renderSidebar();
+    renderSeatMap(currentMembers);
+    renderMembersTable();
+    closeModal(memberModalOverlay);
+
+    showToast(editId ? 'Member updated successfully!' : 'Member added successfully!', 'success');
 }
 
+// ========================
+// DELETE MEMBER
+// ========================
+function openDeleteConfirm(id) {
+    const member = currentMembers.find(m => m.id === id);
+    if (!member) return;
 
+    deletingMemberId = id;
+    deleteMemberNameEl.textContent = member.name;
+    openModal(deleteConfirmOverlay);
+}
 
-// Run
+function handleConfirmDelete() {
+    if (deletingMemberId === null) return;
+
+    currentMembers = currentMembers.filter(m => m.id !== deletingMemberId);
+    deletingMemberId = null;
+
+    saveData();
+    renderSidebar();
+    renderSeatMap(currentMembers);
+    renderMembersTable();
+    closeModal(deleteConfirmOverlay);
+
+    showToast('Member deleted successfully!', 'danger');
+}
+
+// ========================
+// TOAST NOTIFICATION
+// ========================
+function showToast(message, type = 'success') {
+    const container = document.getElementById('toast-container');
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `
+        <span>${message}</span>
+        <button class="toast-close">&times;</button>
+    `;
+
+    container.appendChild(toast);
+
+    // Close on click
+    toast.querySelector('.toast-close').addEventListener('click', () => {
+        toast.classList.add('toast-out');
+        setTimeout(() => toast.remove(), 300);
+    });
+
+    // Auto-remove after 3s
+    setTimeout(() => {
+        if (toast.parentNode) {
+            toast.classList.add('toast-out');
+            setTimeout(() => toast.remove(), 300);
+        }
+    }, 3000);
+}
+
+// ========================
+// RUN
+// ========================
 init();
