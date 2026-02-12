@@ -85,21 +85,38 @@ async function init() {
     setupModalClose(manageMembersOverlay, btnCloseManageModal, btnCloseManage);
     setupModalClose(deleteConfirmOverlay, btnCloseDeleteModal, btnCancelDelete);
 
-    // Load data: localStorage first, then fallback to members.json
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-        try {
-            currentMembers = JSON.parse(saved);
-        } catch (e) {
-            console.error('Failed to parse localStorage data', e);
+    // Check URL for clear_cache parameter
+    const urlParams = new URLSearchParams(window.location.search);
+    const shouldClearCache = urlParams.has('clear_cache');
+
+    if (shouldClearCache) {
+        // Clear localStorage and re-fetch from JSON
+        localStorage.removeItem(STORAGE_KEY);
+        await loadFromJson();
+
+        // Remove clear_cache param from URL to avoid repeated clearing on refresh
+        urlParams.delete('clear_cache');
+        const newUrl = urlParams.toString()
+            ? `${window.location.pathname}?${urlParams}`
+            : window.location.pathname;
+        window.history.replaceState({}, '', newUrl);
+    } else {
+        // Load data: localStorage first, then fallback to members.json
+        const saved = localStorage.getItem(STORAGE_KEY);
+        if (saved) {
+            try {
+                currentMembers = JSON.parse(saved);
+            } catch (e) {
+                console.error('Failed to parse localStorage data', e);
+                await loadFromJson();
+            }
+        } else {
             await loadFromJson();
         }
-    } else {
-        await loadFromJson();
     }
 
     renderSidebar();
-    renderSeatMap(currentMembers);
+    renderSeatMap(randomizeSeats(currentMembers));
 
     // Event Listeners
     btnRandom.addEventListener('click', handleRandomize);
@@ -237,7 +254,7 @@ function renderSeatMap(memberList) {
     gridEl.style.gridTemplateRows = 'repeat(8, 1fr)';
 
     sortedLayout.forEach((seat, index) => {
-        const member = memberList[index];
+        const member = memberList[seat.id - 1] || null;
 
         const seatItem = document.createElement('div');
         seatItem.className = 'seat-item';
@@ -435,7 +452,7 @@ function handleSaveMember() {
 
     saveData();
     renderSidebar();
-    renderSeatMap(currentMembers);
+    renderSeatMap(randomizeSeats(currentMembers));
     renderMembersTable();
     closeModal(memberModalOverlay);
 
@@ -462,7 +479,7 @@ function handleConfirmDelete() {
 
     saveData();
     renderSidebar();
-    renderSeatMap(currentMembers);
+    renderSeatMap(randomizeSeats(currentMembers));
     renderMembersTable();
     closeModal(deleteConfirmOverlay);
 
