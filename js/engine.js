@@ -2,7 +2,7 @@
 
 /**
  * Shuffles an array using Fisher-Yates algorithm
- * @param {Array} array 
+ * @param {Array} array
  * @returns {Array} Shuffled array
  */
 export function shuffle(array) {
@@ -16,8 +16,7 @@ export function shuffle(array) {
 
 /**
  * Defines the zone structure for the seat layout.
- * Each zone is a group of seats (physical desk cluster).
- * Seat IDs within each zone are ordered left-to-right, top-to-bottom.
+ * Each zone is a physical desk cluster. Seat IDs ordered left-to-right, top-to-bottom.
  */
 function getZones() {
     return [
@@ -31,108 +30,88 @@ function getZones() {
 }
 
 /**
- * Minimum number of members from a team allowed in any single zone.
- * If splitting a team across zones would leave fewer than this in either part,
- * skip the remaining seats and start the team in a fresh zone.
- * 
- * Example with MIN_IN_ZONE = 2:
- *  - 7 + 1 split → 1 < 2 → BAD, start new zone for the smaller team
- *  - 6 + 2 split → both >= 2 → OK, allow sharing
- *  - 4 + 4 split → both >= 2 → OK, allow sharing
- *  - Team of 1 person → fits entirely, no split needed → OK
- */
-const MIN_IN_ZONE = 2;
-
-/**
- * Organizes members into seats respecting zone boundaries with smart sharing.
- * 
+ * Assigns members to seats keeping teams clustered.
+ *
  * Strategy:
- * 1. Group members by team, shuffle team order and internal order.
- * 2. Fill zones left-to-right:
- *    a. If a team fits entirely in the remaining zone space → place them,
- *       then check if the NEXT team can also use leftover space.
- *    b. If a team is larger than remaining space → check if splitting
- *       would leave at least MIN_IN_ZONE members on BOTH sides.
- *       - Yes → split (fill this zone, overflow to next)
- *       - No → leave remaining seats empty, start team in next zone
- * 3. This avoids isolated members (e.g. 7+1) while maximizing seat usage (e.g. 4+4).
- * 
- * @param {Array} members 
- * @param {Object} config (unused, kept for API compatibility)
- * @returns {Array} Array of length = total seats, indexed by seatId - 1
+ * 1. Group members by team, shuffle internal order.
+ * 2. For teams larger than a zone, peel off full-zone chunks first.
+ * 3. Sort the resulting "team chunks" by size DESC.
+ * 4. First-Fit-Decreasing bin-packing — pack chunks into zone-sized bins.
+ *    Small teams (e.g. 4+4 or 2+2+4) end up sharing one zone.
+ * 5. Assign filled bins to physical zones (zone order randomized for variety).
+ *
+ * Result: each zone is dominated by one team; sharing only happens when teams
+ * are small enough to fit together cleanly. No isolated singletons.
+ *
+ * @param {Array} members
+ * @returns {Array} Length = total seats, indexed by seatId - 1
  */
-export function randomizeSeats(members, config = { rows: 5, cols: 8 }) {
+export function randomizeSeats(members) {
     const zones = getZones();
-    const totalSeats = zones.reduce((sum, z) => sum + z.seatIds.length, 0);
+    const totalSeats = zones.reduce((s, z) => s + z.seatIds.length, 0);
     const seatAssignment = new Array(totalSeats).fill(null);
+    const ZONE_SIZE = zones[0].seatIds.length;
 
-    // 1. Group by Team
-    const teams = {};
+    // 1. Group by team and shuffle members within each team
+    const teamGroups = {};
     members.forEach(m => {
-        if (!teams[m.teamId]) teams[m.teamId] = [];
-        teams[m.teamId].push(m);
+        if (!teamGroups[m.teamId]) teamGroups[m.teamId] = [];
+        teamGroups[m.teamId].push(m);
     });
 
-    // 2. Shuffle team order & members within each team
-    const shuffledKeys = shuffle(Object.keys(teams));
+    // 2. Build chunk list. Oversize teams are sliced into full-zone chunks + remainder.
+    const chunks = [];
+    Object.keys(teamGroups).forEach(teamId => {
+        let remaining = shuffle(teamGroups[teamId]);
+        while (remaining.length > ZONE_SIZE) {
+            chunks.push({ teamId, members: remaining.slice(0, ZONE_SIZE) });
+            remaining = remaining.slice(ZONE_SIZE);
+        }
+        if (remaining.length > 0) {
+            chunks.push({ teamId, members: remaining });
+        }
+    });
 
-    // Build a queue of teams with their shuffled members
-    const teamQueue = shuffledKeys.map(key => ({
-        teamId: key,
-        members: shuffle(teams[key])
-    }));
+    // 3. Sort chunks by size DESC; randomize ties for variety
+    chunks.sort((a, b) => {
+        if (b.members.length !== a.members.length) return b.members.length - a.members.length;
+        return Math.random() - 0.5;
+    });
 
-    // 3. Fill zones with teams
-    let teamIdx = 0;
-
-    for (let zoneIdx = 0; zoneIdx < zones.length && teamIdx < teamQueue.length; zoneIdx++) {
-        const zone = zones[zoneIdx];
-        const zoneSize = zone.seatIds.length;
-        let seatOffset = 0; // current position within this zone
-        let zoneRemaining = zoneSize;
-
-        // Try to fit one or more teams into this zone
-        while (zoneRemaining > 0 && teamIdx < teamQueue.length) {
-            const currentTeam = teamQueue[teamIdx];
-            const teamMemberCount = currentTeam.members.length;
-
-            if (teamMemberCount === 0) {
-                teamIdx++;
-                continue;
-            }
-
-            if (teamMemberCount <= zoneRemaining) {
-                // ✅ Entire team fits in remaining zone space → place them all
-                for (let i = 0; i < teamMemberCount; i++) {
-                    const seatId = zone.seatIds[seatOffset];
-                    seatAssignment[seatId - 1] = currentTeam.members.shift();
-                    seatOffset++;
-                }
-                zoneRemaining -= teamMemberCount;
-                teamIdx++; // Move to next team
-                // Loop continues: next team might also fit in remaining space
-            } else {
-                // Team is bigger than remaining zone space → would need to split
-                const inThisZone = zoneRemaining;
-                const inNextZone = teamMemberCount - zoneRemaining;
-
-                if (inThisZone >= MIN_IN_ZONE && inNextZone >= MIN_IN_ZONE) {
-                    // ✅ Both parts are large enough → allow split
-                    for (let i = 0; i < inThisZone; i++) {
-                        const seatId = zone.seatIds[seatOffset];
-                        seatAssignment[seatId - 1] = currentTeam.members.shift();
-                        seatOffset++;
-                    }
-                    zoneRemaining = 0;
-                    // Don't increment teamIdx — remaining members go to next zone
-                } else {
-                    // ❌ Would create a tiny fragment → skip remaining seats
-                    // Leave them empty, this team starts fresh in next zone
-                    zoneRemaining = 0;
-                }
+    // 4. First-Fit-Decreasing into bins of ZONE_SIZE
+    const bins = [];
+    for (const chunk of chunks) {
+        let placed = false;
+        for (const bin of bins) {
+            if (bin.remaining >= chunk.members.length) {
+                bin.chunks.push(chunk);
+                bin.remaining -= chunk.members.length;
+                placed = true;
+                break;
             }
         }
+        if (!placed) {
+            bins.push({ chunks: [chunk], remaining: ZONE_SIZE - chunk.members.length });
+        }
     }
+
+    // 5. Randomize zone assignment so the same team doesn't always end up in the same physical spot
+    const shuffledBins = shuffle(bins);
+    const shuffledZoneIndices = shuffle(zones.map((_, i) => i));
+
+    shuffledBins.forEach((bin, i) => {
+        if (i >= zones.length) return; // out of zones (shouldn't happen if members fit)
+        const zone = zones[shuffledZoneIndices[i]];
+        let offset = 0;
+        // Shuffle chunk order within a bin so multi-team zones vary
+        const chunkOrder = shuffle(bin.chunks);
+        for (const chunk of chunkOrder) {
+            for (const member of chunk.members) {
+                const seatId = zone.seatIds[offset++];
+                seatAssignment[seatId - 1] = member;
+            }
+        }
+    });
 
     return seatAssignment;
 }
