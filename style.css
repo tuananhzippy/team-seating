@@ -696,6 +696,24 @@ select.form-input {
     background: rgba(0, 0, 0, 0.02);
 }
 
+.seat-item[draggable="true"] {
+    cursor: grab;
+}
+
+.seat-item.dragging {
+    opacity: 0.4;
+    cursor: grabbing;
+    transform: scale(0.95);
+}
+
+.seat-item.drag-over {
+    outline: 2px dashed var(--primary);
+    outline-offset: -2px;
+    background: rgba(102, 126, 234, 0.15);
+    transform: scale(1.08);
+    z-index: 11;
+}
+
 .placeholder-text {
     text-align: center;
     color: var(--text-muted);

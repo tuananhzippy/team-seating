@@ -50,6 +50,8 @@ const btnCancelDelete = document.getElementById('btn-cancel-delete');
 // ========================
 let currentMembers = [];
 let deletingMemberId = null;
+let currentSeating = []; // aligned to sortedLayout index
+let dragSourceIndex = null;
 
 // ========================
 // MODAL HELPERS (vanilla)
@@ -248,13 +250,16 @@ function renderSeatMap(memberList) {
 
     const sortedLayout = [...SEAT_LAYOUT].sort((a, b) => a.id - b.id);
 
+    // Sync seating state from passed list (aligned by seat.id - 1)
+    currentSeating = sortedLayout.map(seat => memberList[seat.id - 1] || null);
+
     const gridEl = document.createElement('div');
     gridEl.className = 'seat-grid custom-layout';
     gridEl.style.gridTemplateColumns = 'repeat(13, 1fr)';
     gridEl.style.gridTemplateRows = 'repeat(8, 1fr)';
 
     sortedLayout.forEach((seat, index) => {
-        const member = memberList[seat.id - 1] || null;
+        const member = currentSeating[index];
 
         const seatItem = document.createElement('div');
         seatItem.className = 'seat-item';
@@ -262,12 +267,14 @@ function renderSeatMap(memberList) {
         seatItem.style.gridRow = seat.row;
         seatItem.style.animation = `fadeIn 0.3s ease forwards ${index * 0.01}s`;
         seatItem.style.opacity = '0';
+        seatItem.dataset.index = index;
 
         const seatNumBadge = `<div class="seat-number-badge">${seat.label}</div>`;
 
         if (member) {
             seatItem.style.borderColor = member.teamColor;
             seatItem.style.background = `linear-gradient(135deg, #ffffff, ${member.teamColor}11)`;
+            seatItem.draggable = true;
 
             seatItem.innerHTML = `
                 ${seatNumBadge}
@@ -280,6 +287,7 @@ function renderSeatMap(memberList) {
             seatItem.innerHTML = `${seatNumBadge}<span class="text-muted" style="font-size:0.7em">Empty</span>`;
         }
 
+        attachDragHandlers(seatItem);
         gridEl.appendChild(seatItem);
     });
 
@@ -293,6 +301,64 @@ function renderSeatMap(memberList) {
     });
 
     seatMapEl.appendChild(gridEl);
+}
+
+// ========================
+// DRAG & DROP SWAP
+// ========================
+function attachDragHandlers(seatEl) {
+    seatEl.addEventListener('dragstart', (e) => {
+        if (!seatEl.draggable) return;
+        dragSourceIndex = parseInt(seatEl.dataset.index);
+        seatEl.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(dragSourceIndex));
+    });
+
+    seatEl.addEventListener('dragend', () => {
+        seatEl.classList.remove('dragging');
+        document.querySelectorAll('.seat-item.drag-over')
+            .forEach(el => el.classList.remove('drag-over'));
+        dragSourceIndex = null;
+    });
+
+    seatEl.addEventListener('dragover', (e) => {
+        if (dragSourceIndex === null) return;
+        const targetIndex = parseInt(seatEl.dataset.index);
+        if (targetIndex === dragSourceIndex) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        seatEl.classList.add('drag-over');
+    });
+
+    seatEl.addEventListener('dragleave', () => {
+        seatEl.classList.remove('drag-over');
+    });
+
+    seatEl.addEventListener('drop', (e) => {
+        e.preventDefault();
+        seatEl.classList.remove('drag-over');
+        const targetIndex = parseInt(seatEl.dataset.index);
+        const sourceIndex = dragSourceIndex !== null
+            ? dragSourceIndex
+            : parseInt(e.dataTransfer.getData('text/plain'));
+        if (isNaN(sourceIndex) || sourceIndex === targetIndex) return;
+        swapSeats(sourceIndex, targetIndex);
+    });
+}
+
+function swapSeats(i, j) {
+    const tmp = currentSeating[i];
+    currentSeating[i] = currentSeating[j];
+    currentSeating[j] = tmp;
+
+    // Rebuild memberList aligned by seat.id - 1 for re-render
+    const sortedLayout = [...SEAT_LAYOUT].sort((a, b) => a.id - b.id);
+    const newList = [];
+    sortedLayout.forEach((seat, idx) => {
+        newList[seat.id - 1] = currentSeating[idx];
+    });
+    renderSeatMap(newList);
 }
 
 // ========================
