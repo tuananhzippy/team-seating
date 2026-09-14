@@ -24,10 +24,6 @@ export const SEAT_LAYOUT = [
     { id: 18, label: '18', col: 2, row: 7 },
     { id: 19, label: '19', col: 3, row: 7 },
     { id: 20, label: '20', col: 4, row: 7 },
-    { id: 24, label: '24', col: 1, row: 8 },
-    { id: 23, label: '23', col: 2, row: 8 },
-    { id: 22, label: '22', col: 3, row: 8 },
-    { id: 21, label: '21', col: 4, row: 8 },
 
     // Middle Vertical Block
     { id: 25, label: '25', col: 6, row: 1 },
@@ -48,16 +44,6 @@ export const SEAT_LAYOUT = [
     { id: 38, label: '38', col: 10, row: 3 },
     { id: 36, label: '36', col: 9, row: 4 },
     { id: 37, label: '37', col: 10, row: 4 },
-
-    // Right Vertical Block 2
-    { id: 41, label: '41', col: 12, row: 1 },
-    { id: 45, label: '45', col: 13, row: 1 },
-    { id: 42, label: '42', col: 12, row: 2 },
-    { id: 46, label: '46', col: 13, row: 2 },
-    { id: 43, label: '43', col: 12, row: 3 },
-    { id: 47, label: '47', col: 13, row: 3 },
-    { id: 44, label: '44', col: 12, row: 4 },
-    { id: 48, label: '48', col: 13, row: 4 },
 ];
 
 export const SPECIAL_ZONES = [

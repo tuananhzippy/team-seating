@@ -22,10 +22,9 @@ function getZones() {
     return [
         { name: 'Left Top', seatIds: [1, 2, 3, 4, 5, 6, 7, 8] },
         { name: 'Left Middle', seatIds: [9, 10, 11, 12, 13, 14, 15, 16] },
-        { name: 'Left Bottom', seatIds: [17, 18, 19, 20, 21, 22, 23, 24] },
+        { name: 'Left Bottom', seatIds: [17, 18, 19, 20] },
         { name: 'Middle', seatIds: [25, 26, 27, 28, 29, 30, 31, 32] },
         { name: 'Right 1', seatIds: [33, 34, 35, 36, 37, 38, 39, 40] },
-        { name: 'Right 2', seatIds: [41, 42, 43, 44, 45, 46, 47, 48] },
     ];
 }
 
@@ -48,9 +47,9 @@ function getZones() {
  */
 export function randomizeSeats(members) {
     const zones = getZones();
-    const totalSeats = zones.reduce((s, z) => s + z.seatIds.length, 0);
-    const seatAssignment = new Array(totalSeats).fill(null);
-    const ZONE_SIZE = zones[0].seatIds.length;
+    const maxSeatId = Math.max(...zones.flatMap(z => z.seatIds));
+    const seatAssignment = new Array(maxSeatId).fill(null);
+    const MAX_ZONE_SIZE = Math.max(...zones.map(z => z.seatIds.length));
 
     // 1. Group by team and shuffle members within each team
     const teamGroups = {};
@@ -63,9 +62,9 @@ export function randomizeSeats(members) {
     const chunks = [];
     Object.keys(teamGroups).forEach(teamId => {
         let remaining = shuffle(teamGroups[teamId]);
-        while (remaining.length > ZONE_SIZE) {
-            chunks.push({ teamId, members: remaining.slice(0, ZONE_SIZE) });
-            remaining = remaining.slice(ZONE_SIZE);
+        while (remaining.length > MAX_ZONE_SIZE) {
+            chunks.push({ teamId, members: remaining.slice(0, MAX_ZONE_SIZE) });
+            remaining = remaining.slice(MAX_ZONE_SIZE);
         }
         if (remaining.length > 0) {
             chunks.push({ teamId, members: remaining });
@@ -78,36 +77,46 @@ export function randomizeSeats(members) {
         return Math.random() - 0.5;
     });
 
-    // 4. First-Fit-Decreasing into bins of ZONE_SIZE
-    const bins = [];
+    // 4. First-Fit-Decreasing into one bin per zone.
+    //    Zones can differ in size, so each bin carries its own capacity.
+    //    Shuffle first (so the same team doesn't always land in the same physical spot),
+    //    then sort by capacity DESC — big chunks meet big zones first.
+    const bins = shuffle(zones.map(z => ({ zone: z, chunks: [], remaining: z.seatIds.length })))
+        .sort((a, b) => b.remaining - a.remaining);
+
+    const overflow = [];
     for (const chunk of chunks) {
-        let placed = false;
-        for (const bin of bins) {
-            if (bin.remaining >= chunk.members.length) {
-                bin.chunks.push(chunk);
-                bin.remaining -= chunk.members.length;
-                placed = true;
-                break;
-            }
-        }
-        if (!placed) {
-            bins.push({ chunks: [chunk], remaining: ZONE_SIZE - chunk.members.length });
+        const bin = bins.find(b => b.remaining >= chunk.members.length);
+        if (bin) {
+            bin.chunks.push(chunk);
+            bin.remaining -= chunk.members.length;
+        } else {
+            overflow.push(chunk);
         }
     }
 
-    // 5. Randomize zone assignment so the same team doesn't always end up in the same physical spot
-    const shuffledBins = shuffle(bins);
-    const shuffledZoneIndices = shuffle(zones.map((_, i) => i));
+    // 4b. Chunks too big for any leftover gap get split across whatever space is left.
+    for (const chunk of overflow) {
+        let rest = chunk.members;
+        for (const bin of bins) {
+            if (!rest.length) break;
+            if (bin.remaining <= 0) continue;
+            const take = rest.slice(0, bin.remaining);
+            bin.chunks.push({ teamId: chunk.teamId, members: take });
+            bin.remaining -= take.length;
+            rest = rest.slice(take.length);
+        }
+        // rest.length > 0 means more members than seats — those stay unseated
+    }
 
-    shuffledBins.forEach((bin, i) => {
-        if (i >= zones.length) return; // out of zones (shouldn't happen if members fit)
-        const zone = zones[shuffledZoneIndices[i]];
+    // 5. Fill seats zone by zone
+    bins.forEach(bin => {
         let offset = 0;
         // Shuffle chunk order within a bin so multi-team zones vary
         const chunkOrder = shuffle(bin.chunks);
         for (const chunk of chunkOrder) {
             for (const member of chunk.members) {
-                const seatId = zone.seatIds[offset++];
+                const seatId = bin.zone.seatIds[offset++];
                 seatAssignment[seatId - 1] = member;
             }
         }
