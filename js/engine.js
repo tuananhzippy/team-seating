@@ -42,18 +42,47 @@ function getZones() {
  * Result: each zone is dominated by one team; sharing only happens when teams
  * are small enough to fit together cleanly. No isolated singletons.
  *
+ * Locked seats keep their member: the seat is removed from its zone's capacity
+ * and the member is removed from the shuffle pool. Teams that already have a
+ * locked member in a zone prefer to be packed into that same zone.
+ *
  * @param {Array} members
+ * @param {Object} locks Map seatId -> memberId of seats that must not change
  * @returns {Array} Length = total seats, indexed by seatId - 1
  */
-export function randomizeSeats(members) {
-    const zones = getZones();
-    const maxSeatId = Math.max(...zones.flatMap(z => z.seatIds));
+export function randomizeSeats(members, locks = {}) {
+    const allZones = getZones();
+    const maxSeatId = Math.max(...allZones.flatMap(z => z.seatIds));
     const seatAssignment = new Array(maxSeatId).fill(null);
-    const MAX_ZONE_SIZE = Math.max(...zones.map(z => z.seatIds.length));
+
+    // 0. Pin locked members to their seats; drop locks whose member no longer exists
+    const memberById = new Map(members.map(m => [m.id, m]));
+    const lockedMemberIds = new Set();
+    const lockedSeatIds = new Set();
+    Object.entries(locks).forEach(([seatId, memberId]) => {
+        const member = memberById.get(memberId);
+        const sid = Number(seatId);
+        if (member && sid >= 1 && sid <= maxSeatId && !lockedMemberIds.has(memberId)) {
+            seatAssignment[sid - 1] = member;
+            lockedMemberIds.add(memberId);
+            lockedSeatIds.add(sid);
+        }
+    });
+
+    // Zones shrink to their free seats; remember which teams are already pinned there
+    const zones = allZones.map(z => ({
+        ...z,
+        seatIds: z.seatIds.filter(id => !lockedSeatIds.has(id)),
+        lockedTeams: new Set(
+            z.seatIds.filter(id => lockedSeatIds.has(id)).map(id => seatAssignment[id - 1].teamId)
+        ),
+    }));
+    const freeMembers = members.filter(m => !lockedMemberIds.has(m.id));
+    const MAX_ZONE_SIZE = Math.max(1, ...zones.map(z => z.seatIds.length));
 
     // 1. Group by team and shuffle members within each team
     const teamGroups = {};
-    members.forEach(m => {
+    freeMembers.forEach(m => {
         if (!teamGroups[m.teamId]) teamGroups[m.teamId] = [];
         teamGroups[m.teamId].push(m);
     });
@@ -86,7 +115,9 @@ export function randomizeSeats(members) {
 
     const overflow = [];
     for (const chunk of chunks) {
-        const bin = bins.find(b => b.remaining >= chunk.members.length);
+        const fits = b => b.remaining >= chunk.members.length;
+        const bin = bins.find(b => fits(b) && b.zone.lockedTeams.has(chunk.teamId))
+            || bins.find(fits);
         if (bin) {
             bin.chunks.push(chunk);
             bin.remaining -= chunk.members.length;

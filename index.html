@@ -10,9 +10,19 @@
     <!-- Google Fonts only -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
+    <script>
+        // Access gate: page only opens with ?token=emberbet
+        document.documentElement.dataset.auth =
+            new URLSearchParams(location.search).get('token') === 'emberbet' ? 'ok' : 'denied';
+    </script>
 </head>
 
 <body>
+    <div class="access-denied">
+        <h3>🔒 Access denied</h3>
+        <p>Liên kết không hợp lệ hoặc thiếu token.</p>
+    </div>
+
     <div class="app-layout">
         <!-- Sidebar -->
         <aside class="sidebar glass-panel">
@@ -26,6 +36,10 @@
                 <button id="btn-manage-members" class="btn btn-manage btn-block">
                     ⚙️ Manage Members
                 </button>
+                <button id="btn-unlock-all" class="btn btn-secondary btn-block" hidden>
+                    🔓 Unlock all (<span id="locked-count">0</span>)
+                </button>
+                <small class="text-muted lock-hint">Bấm 🔓 trên ghế để khoá — ghế khoá giữ nguyên khi Randomize.</small>
             </div>
 
             <div class="members-list" id="team-summary">

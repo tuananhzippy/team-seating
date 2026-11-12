@@ -6,12 +6,15 @@ import { SEAT_LAYOUT, SPECIAL_ZONES } from './layout.js';
 // CONFIG
 // ========================
 const STORAGE_KEY = 'seat_randomizer_data';
+const LOCKS_KEY = 'seat_randomizer_locks';
 
 // ========================
 // DOM ELEMENTS
 // ========================
 const seatMapEl = document.getElementById('seat-map');
 const btnRandom = document.getElementById('btn-random');
+const btnUnlockAll = document.getElementById('btn-unlock-all');
+const lockedCountEl = document.getElementById('locked-count');
 const teamSummaryEl = document.getElementById('team-summary');
 const totalCountEl = document.getElementById('total-count');
 
@@ -52,6 +55,7 @@ let currentMembers = [];
 let deletingMemberId = null;
 let currentSeating = []; // aligned to sortedLayout index
 let dragSourceIndex = null;
+let seatLocks = {}; // seatId -> memberId, seats kept as-is on randomize
 
 // ========================
 // MODAL HELPERS (vanilla)
@@ -94,6 +98,7 @@ async function init() {
     if (shouldClearCache) {
         // Clear localStorage and re-fetch from JSON
         localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(LOCKS_KEY);
         await loadFromJson();
 
         // Remove clear_cache param from URL to avoid repeated clearing on refresh
@@ -117,11 +122,13 @@ async function init() {
         }
     }
 
+    loadLocks();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers));
+    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
 
     // Event Listeners
     btnRandom.addEventListener('click', handleRandomize);
+    btnUnlockAll.addEventListener('click', handleUnlockAll);
     btnManageMembers.addEventListener('click', openManageModal);
     btnAddMember.addEventListener('click', openAddMemberModal);
     btnSaveMember.addEventListener('click', handleSaveMember);
@@ -176,6 +183,56 @@ function populateTeamSelects() {
 // ========================
 function saveData() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(currentMembers));
+}
+
+function loadLocks() {
+    try {
+        seatLocks = JSON.parse(localStorage.getItem(LOCKS_KEY)) || {};
+    } catch (e) {
+        console.error('Failed to parse seat locks', e);
+        seatLocks = {};
+    }
+    pruneLocks();
+}
+
+function saveLocks() {
+    localStorage.setItem(LOCKS_KEY, JSON.stringify(seatLocks));
+}
+
+// Drop locks pointing to members that no longer exist
+function pruneLocks() {
+    const ids = new Set(currentMembers.map(m => m.id));
+    Object.keys(seatLocks).forEach(seatId => {
+        if (!ids.has(seatLocks[seatId])) delete seatLocks[seatId];
+    });
+    saveLocks();
+}
+
+function isSeatLocked(seatId) {
+    return seatLocks[seatId] !== undefined;
+}
+
+function updateLockControls() {
+    const count = Object.keys(seatLocks).length;
+    lockedCountEl.textContent = count;
+    btnUnlockAll.hidden = count === 0;
+}
+
+function toggleSeatLock(seatId, member) {
+    if (isSeatLocked(seatId)) {
+        delete seatLocks[seatId];
+    } else if (member) {
+        seatLocks[seatId] = member.id;
+    }
+    saveLocks();
+    renderSeatMap(currentSeatingAsList());
+}
+
+function handleUnlockAll() {
+    seatLocks = {};
+    saveLocks();
+    renderSeatMap(currentSeatingAsList());
+    showToast('All seats unlocked', 'success');
 }
 
 function getNextId() {
@@ -271,13 +328,17 @@ function renderSeatMap(memberList) {
 
         const seatNumBadge = `<div class="seat-number-badge">${seat.label}</div>`;
 
+        const locked = isSeatLocked(seat.id);
+
         if (member) {
             seatItem.style.borderColor = member.teamColor;
             seatItem.style.background = `linear-gradient(135deg, #ffffff, ${member.teamColor}11)`;
-            seatItem.draggable = true;
+            seatItem.draggable = !locked;
+            if (locked) seatItem.classList.add('locked');
 
             seatItem.innerHTML = `
                 ${seatNumBadge}
+                <button type="button" class="seat-lock-btn" title="${locked ? 'Unlock seat' : 'Lock seat (keep on randomize)'}">${locked ? '🔒' : '🔓'}</button>
                 <div class="team-dot" style="background-color: ${member.teamColor}; box-shadow: 0 0 5px ${member.teamColor}"></div>
                 <div class="member-name" style="font-size: 0.75rem;">${member.name}</div>
                 <div class="member-role">${member.teamName}</div>
@@ -285,6 +346,15 @@ function renderSeatMap(memberList) {
         } else {
             seatItem.classList.add('empty-seat');
             seatItem.innerHTML = `${seatNumBadge}<span class="text-muted" style="font-size:0.7em">Empty</span>`;
+        }
+
+        const lockBtn = seatItem.querySelector('.seat-lock-btn');
+        if (lockBtn) {
+            lockBtn.addEventListener('mousedown', (e) => e.stopPropagation());
+            lockBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleSeatLock(seat.id, member);
+            });
         }
 
         attachDragHandlers(seatItem);
@@ -301,6 +371,7 @@ function renderSeatMap(memberList) {
     });
 
     seatMapEl.appendChild(gridEl);
+    updateLockControls();
 }
 
 // ========================
@@ -325,7 +396,7 @@ function attachDragHandlers(seatEl) {
     seatEl.addEventListener('dragover', (e) => {
         if (dragSourceIndex === null) return;
         const targetIndex = parseInt(seatEl.dataset.index);
-        if (targetIndex === dragSourceIndex) return;
+        if (targetIndex === dragSourceIndex || seatEl.classList.contains('locked')) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         seatEl.classList.add('drag-over');
@@ -343,6 +414,7 @@ function attachDragHandlers(seatEl) {
             ? dragSourceIndex
             : parseInt(e.dataTransfer.getData('text/plain'));
         if (isNaN(sourceIndex) || sourceIndex === targetIndex) return;
+        if (seatEl.classList.contains('locked')) return;
         swapSeats(sourceIndex, targetIndex);
     });
 }
@@ -351,14 +423,17 @@ function swapSeats(i, j) {
     const tmp = currentSeating[i];
     currentSeating[i] = currentSeating[j];
     currentSeating[j] = tmp;
+    renderSeatMap(currentSeatingAsList());
+}
 
-    // Rebuild memberList aligned by seat.id - 1 for re-render
+// Rebuild memberList aligned by seat.id - 1 for re-render
+function currentSeatingAsList() {
     const sortedLayout = [...SEAT_LAYOUT].sort((a, b) => a.id - b.id);
-    const newList = [];
+    const list = [];
     sortedLayout.forEach((seat, idx) => {
-        newList[seat.id - 1] = currentSeating[idx];
+        list[seat.id - 1] = currentSeating[idx];
     });
-    renderSeatMap(newList);
+    return list;
 }
 
 // ========================
@@ -370,7 +445,7 @@ function handleRandomize() {
     btnRandom.textContent = '⏳ Mixing...';
 
     setTimeout(() => {
-        const randomizedList = randomizeSeats(currentMembers);
+        const randomizedList = randomizeSeats(currentMembers, seatLocks);
         renderSeatMap(randomizedList);
         btnRandom.disabled = false;
         btnRandom.textContent = origText;
@@ -517,8 +592,9 @@ function handleSaveMember() {
     }
 
     saveData();
+    pruneLocks();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers));
+    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
     renderMembersTable();
     closeModal(memberModalOverlay);
 
@@ -544,8 +620,9 @@ function handleConfirmDelete() {
     deletingMemberId = null;
 
     saveData();
+    pruneLocks();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers));
+    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
     renderMembersTable();
     closeModal(deleteConfirmOverlay);
 
@@ -584,4 +661,6 @@ function showToast(message, type = 'success') {
 // ========================
 // RUN
 // ========================
-init();
+if (document.documentElement.dataset.auth === 'ok') {
+    init();
+}
