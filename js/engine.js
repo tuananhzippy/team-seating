@@ -43,12 +43,18 @@ function getBlocks() {
 
 const MAX_ASSIGNMENTS = 50000; // block-assignment enumeration limit (k^teams)
 const MAX_ORDER_PIECES = 7;    // permutation search limit inside one block (7! = 5040)
+const MAX_FILL_EVALS = 200000; // anchor splits x orders tried per block
+
+function factorial(n) {
+    return n <= 1 ? 1 : n * factorial(n - 1);
+}
 
 /**
  * Pick which block each team goes to.
  * Enumerates every team→block assignment and keeps the best:
- *   1. least overflow (members that must be split off to another block),
- *   2. fewest locked members whose team is placed in a different block.
+ *   1. fewest locked members whose team is placed in a different block
+ *      (a team always follows its locked members, so nobody is left sitting alone),
+ *   2. least overflow (members that must be split off to another block).
  * Ties are broken randomly so each randomize gives a different layout.
  */
 function chooseBlocks(teams, blocks) {
@@ -67,7 +73,7 @@ function chooseBlocks(teams, blocks) {
             });
         });
         const overflow = loads.reduce((sum, load, b) => sum + Math.max(0, load - blocks[b].free.length), 0);
-        const key = [overflow, lockPenalty];
+        const key = [lockPenalty, overflow];
         const cmp = bestKey === null ? -1
             : (key[0] - bestKey[0]) || (key[1] - bestKey[1]);
         if (cmp < 0) {
@@ -102,65 +108,157 @@ function chooseBlocks(teams, blocks) {
     return assign;
 }
 
+function permutations(items) {
+    if (items.length <= 1) return [items];
+    const out = [];
+    items.forEach((item, i) => {
+        const rest = [...items.slice(0, i), ...items.slice(i + 1)];
+        permutations(rest).forEach(p => out.push([item, ...p]));
+    });
+    return out;
+}
+
 /**
- * Order the team pieces inside one block and fill its free seats in strip order.
- * Picks the order that (1) keeps each team next to its locked members,
- * (2) splits the fewest pieces across desk clusters; random among ties.
+ * Fill one block's free seats (in strip order) with the team pieces.
+ *
+ * Teams that have a locked member in this block are anchored first: a run of their
+ * members wraps the locked seat (x members before it, the rest after), so the locked
+ * member sits next to teammates. The other teams then fill the remaining free seats
+ * one after another.
+ *
+ * Every anchor split and every order of the other teams is tried; the winner has
+ * (1) fewest locked members without a teammate beside them, (2) fewest teams cut
+ * into more than one run, (3) fewest teams spread over two desk clusters.
+ * If anchors collide (locks close together), anchored teams may also be cut:
+ * part wraps the lock, the rest sits further along. Ties are picked at random.
  */
 function fillBlock(block, pieces, zoneOf, lockedByTeam, seatAssignment) {
     const posOf = new Map(block.seatIds.map((id, i) => [id, i]));
+    const freeIdx = new Map(block.free.map((id, i) => [id, i]));
+    const lockedSeatsHere = [...lockedByTeam.entries()]
+        .flatMap(([teamId, seats]) => seats.filter(sid => posOf.has(sid)).map(sid => ({ teamId, sid })));
 
-    const layout = (order) => {
+    const anchored = [];
+    const others = [];
+    for (const piece of pieces) {
+        const lockedHere = lockedSeatsHere
+            .filter(l => l.teamId === piece.teamId)
+            .map(l => l.sid)
+            .sort((a, b) => posOf.get(a) - posOf.get(b));
+        if (lockedHere.length) {
+            const lockPos = posOf.get(lockedHere[0]);
+            const before = block.free.filter(id => posOf.get(id) < lockPos).length;
+            anchored.push({ piece, before });
+        } else {
+            others.push(piece);
+        }
+    }
+
+    const score = (placed) => {
+        const teamAt = new Map(lockedSeatsHere.map(l => [l.sid, l.teamId]));
+        const seatsByTeam = new Map();
+        for (const { piece, seats } of placed) {
+            seats.forEach(id => teamAt.set(id, piece.teamId));
+            if (!seatsByTeam.has(piece.teamId)) seatsByTeam.set(piece.teamId, []);
+            seatsByTeam.get(piece.teamId).push(...seats);
+        }
+        let lonely = 0;
+        for (const { teamId, sid } of lockedSeatsHere) {
+            const p = posOf.get(sid);
+            const near = [block.seatIds[p - 1], block.seatIds[p + 1]];
+            if (!near.some(id => id !== undefined && teamAt.get(id) === teamId)) lonely++;
+        }
+        let cuts = 0;
+        let crossings = 0;
+        for (const seats of seatsByTeam.values()) {
+            if (!seats.length) continue;
+            const idx = seats.map(id => freeIdx.get(id)).sort((a, b) => a - b);
+            for (let i = 1; i < idx.length; i++) if (idx[i] !== idx[i - 1] + 1) cuts++;
+            crossings += new Set(seats.map(id => zoneOf.get(id))).size - 1;
+        }
+        return [lonely, cuts, crossings];
+    };
+
+    const layoutSequential = (order, seatList) => {
         const placed = [];
         let offset = 0;
         for (const piece of order) {
-            const seats = block.free.slice(offset, offset + piece.members.length);
-            placed.push({ piece, seats });
-            offset += seats.length;
+            placed.push({ piece, seats: seatList.slice(offset, offset + piece.members.length) });
+            offset += piece.members.length;
         }
         return placed;
     };
 
-    const score = (placed) => {
-        let lockDist = 0;
-        let crossings = 0;
-        for (const { piece, seats } of placed) {
-            if (!seats.length) continue;
-            crossings += new Set(seats.map(id => zoneOf.get(id))).size - 1;
-            for (const lockedSeat of lockedByTeam.get(piece.teamId) || []) {
-                if (!posOf.has(lockedSeat)) continue;
-                const p = posOf.get(lockedSeat);
-                lockDist += Math.min(...seats.map(id => Math.abs(posOf.get(id) - p)));
-            }
+    // Best layout, random among ties (reservoir sampling)
+    let chosen = null;
+    let bestKey = null;
+    let ties = 0;
+    const consider = (placed) => {
+        const key = score(placed);
+        let cmp = bestKey === null ? -1 : 0;
+        for (let i = 0; cmp === 0 && i < key.length; i++) cmp = key[i] - bestKey[i];
+        if (cmp < 0) {
+            bestKey = key;
+            chosen = placed;
+            ties = 1;
+        } else if (cmp === 0 && Math.random() < 1 / ++ties) {
+            chosen = placed;
         }
-        return [lockDist, crossings];
     };
 
-    let candidates;
-    if (pieces.length <= MAX_ORDER_PIECES) {
-        candidates = [];
-        let bestKey = null;
-        const permute = (rest, order) => {
-            if (!rest.length) {
-                const placed = layout(order);
-                const key = score(placed);
-                const cmp = bestKey === null ? -1 : (key[0] - bestKey[0]) || (key[1] - bestKey[1]);
-                if (cmp < 0) {
-                    bestKey = key;
-                    candidates = [placed];
-                } else if (cmp === 0) {
-                    candidates.push(placed);
-                }
-                return;
+    // allowCut=false: anchored teams sit whole around their lock.
+    // allowCut=true: only k of them wrap the lock, the rest joins the other teams.
+    const search = (allowCut) => {
+        const options = anchored.map(a => {
+            const len = a.piece.members.length;
+            const list = [];
+            for (let k = allowCut ? 1 : len; k <= len; k++) {
+                for (let x = 0; x <= k; x++) list.push([k, x]);
             }
-            rest.forEach((p, i) => permute([...rest.slice(0, i), ...rest.slice(i + 1)], [...order, p]));
-        };
-        permute(pieces, []);
-    } else {
-        candidates = [layout(shuffle(pieces))];
-    }
+            return list;
+        });
+        const combos = options.reduce((n, list) => n * list.length, 1);
+        const pick = new Array(anchored.length).fill(0);
+        for (;;) {
+            const taken = new Set();
+            const placedAnchors = [];
+            const pool = [...others];
+            let ok = true;
+            anchored.forEach((a, i) => {
+                if (!ok) return;
+                const [k, x] = options[i][pick[i]];
+                const startIdx = a.before - x;
+                const seats = block.free.slice(startIdx, startIdx + k);
+                if (startIdx < 0 || seats.length !== k || seats.some(id => taken.has(id))) {
+                    ok = false;
+                    return;
+                }
+                seats.forEach(id => taken.add(id));
+                placedAnchors.push({ piece: { teamId: a.piece.teamId, members: a.piece.members.slice(0, k) }, seats });
+                if (k < a.piece.members.length) {
+                    pool.push({ teamId: a.piece.teamId, members: a.piece.members.slice(k) });
+                }
+            });
+            if (ok) {
+                const rest = block.free.filter(id => !taken.has(id));
+                const fullSearch = pool.length <= MAX_ORDER_PIECES
+                    && combos * factorial(pool.length) <= MAX_FILL_EVALS;
+                const orders = fullSearch
+                    ? permutations(pool)
+                    : Array.from({ length: Math.max(1, Math.min(50, Math.floor(MAX_FILL_EVALS / combos))) },
+                        () => shuffle(pool));
+                for (const order of orders) consider([...placedAnchors, ...layoutSequential(order, rest)]);
+            }
+            let i = 0;
+            while (i < pick.length && ++pick[i] === options[i].length) pick[i++] = 0;
+            if (i === pick.length) break;
+        }
+    };
 
-    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    search(false);
+    if (!chosen || bestKey[0] > 0) search(true);
+    if (!chosen) chosen = layoutSequential(shuffle(pieces), block.free);
+
     for (const { piece, seats } of chosen) {
         seats.forEach((seatId, i) => {
             seatAssignment[seatId - 1] = piece.members[i];
@@ -175,12 +273,13 @@ function fillBlock(block, pieces, zoneOf, lockedByTeam, seatAssignment) {
  * 1. Locked seats keep their member; blocked seats stay empty. Both are taken out
  *    of the free seats.
  * 2. Every team goes whole into one block (continuous strip of adjacent clusters).
- *    All team→block combinations are tried; the one needing the fewest members
- *    split off wins (usually zero), preferring the block of the team's locked members.
- * 3. If a block still overflows (not enough room anywhere), its largest team gives
+ *    A team always goes to the block of its locked members; among those combinations
+ *    the one needing the fewest members split off wins (usually zero).
+ * 3. If a block still overflows, its largest team without a locked member there gives
  *    the extra members to the block with most free room, as one consecutive piece.
- * 4. Inside a block, teams take consecutive seats along the strip, in the order
- *    that keeps teams beside their locked members and inside one cluster.
+ * 4. Inside a block, teams with a locked member wrap around the locked seat; the
+ *    other teams take consecutive seats along the strip in the order that cuts the
+ *    fewest teams and keeps them inside one cluster.
  *
  * @param {Array} members
  * @param {Object} locks Map seatId -> memberId of seats that must not change
@@ -238,12 +337,19 @@ export function randomizeSeats(members, locks = {}, blocked = []) {
     const pieces = blocks.map(() => []);
     teams.forEach((t, i) => pieces[assign[i]].push({ teamId: t.teamId, members: [...t.members] }));
 
-    // 3. Overflow: largest team in an over-full block hands its extra members to the roomiest block
+    // 3. Overflow: largest team in an over-full block hands its extra members to the roomiest block.
+    //    Teams with a locked member in this block give last, so the locked member keeps company.
     const loadOf = b => pieces[b].reduce((sum, p) => sum + p.members.length, 0);
+    const pickDonor = b => {
+        const hasLockHere = p => (lockedByTeam.get(p.teamId) || []).some(sid => blockOf.get(sid) === b);
+        const free = pieces[b].filter(p => !hasLockHere(p));
+        const pool = free.length ? free : pieces[b];
+        return pool.reduce((a, p) => (p.members.length > a.members.length ? p : a));
+    };
     blocks.forEach((block, b) => {
         let excess = loadOf(b) - block.free.length;
         while (excess > 0) {
-            const donor = pieces[b].reduce((a, p) => (p.members.length > a.members.length ? p : a));
+            const donor = pickDonor(b);
             const room = blocks.map((other, o) => (o === b ? 0 : other.free.length - loadOf(o)));
             const target = room.indexOf(Math.max(...room));
             const take = Math.min(excess, donor.members.length, Math.max(0, room[target]));
