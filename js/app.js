@@ -7,6 +7,7 @@ import { SEAT_LAYOUT, SPECIAL_ZONES } from './layout.js';
 // ========================
 const STORAGE_KEY = 'seat_randomizer_data';
 const LOCKS_KEY = 'seat_randomizer_locks';
+const BLOCKED_KEY = 'seat_randomizer_blocked';
 
 // ========================
 // DOM ELEMENTS
@@ -15,6 +16,8 @@ const seatMapEl = document.getElementById('seat-map');
 const btnRandom = document.getElementById('btn-random');
 const btnUnlockAll = document.getElementById('btn-unlock-all');
 const lockedCountEl = document.getElementById('locked-count');
+const btnUnblockAll = document.getElementById('btn-unblock-all');
+const blockedCountEl = document.getElementById('blocked-count');
 const teamSummaryEl = document.getElementById('team-summary');
 const totalCountEl = document.getElementById('total-count');
 
@@ -56,6 +59,7 @@ let deletingMemberId = null;
 let currentSeating = []; // aligned to sortedLayout index
 let dragSourceIndex = null;
 let seatLocks = {}; // seatId -> memberId, seats kept as-is on randomize
+let blockedSeats = new Set(); // seatIds that must stay empty
 
 // ========================
 // MODAL HELPERS (vanilla)
@@ -99,6 +103,7 @@ async function init() {
         // Clear localStorage and re-fetch from JSON
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem(LOCKS_KEY);
+        localStorage.removeItem(BLOCKED_KEY);
         await loadFromJson();
 
         // Remove clear_cache param from URL to avoid repeated clearing on refresh
@@ -123,12 +128,14 @@ async function init() {
     }
 
     loadLocks();
+    loadBlocked();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
+    renderSeatMap(randomizeAll());
 
     // Event Listeners
     btnRandom.addEventListener('click', handleRandomize);
     btnUnlockAll.addEventListener('click', handleUnlockAll);
+    btnUnblockAll.addEventListener('click', handleUnblockAll);
     btnManageMembers.addEventListener('click', openManageModal);
     btnAddMember.addEventListener('click', openAddMemberModal);
     btnSaveMember.addEventListener('click', handleSaveMember);
@@ -216,6 +223,60 @@ function updateLockControls() {
     const count = Object.keys(seatLocks).length;
     lockedCountEl.textContent = count;
     btnUnlockAll.hidden = count === 0;
+    blockedCountEl.textContent = blockedSeats.size;
+    btnUnblockAll.hidden = blockedSeats.size === 0;
+}
+
+function loadBlocked() {
+    try {
+        blockedSeats = new Set((JSON.parse(localStorage.getItem(BLOCKED_KEY)) || []).map(Number));
+    } catch (e) {
+        console.error('Failed to parse blocked seats', e);
+        blockedSeats = new Set();
+    }
+}
+
+function saveBlocked() {
+    localStorage.setItem(BLOCKED_KEY, JSON.stringify([...blockedSeats]));
+}
+
+function randomizeAll() {
+    const list = randomizeSeats(currentMembers, seatLocks, [...blockedSeats]);
+    const unseated = currentMembers.length - list.filter(Boolean).length;
+    if (unseated > 0) {
+        showToast(`${unseated} member(s) have no seat — unblock a seat`, 'danger');
+    }
+    return list;
+}
+
+// Block a seat (keep it empty). An occupied seat moves its member to a free seat first.
+function toggleSeatBlock(seatId, index) {
+    if (blockedSeats.has(seatId)) {
+        blockedSeats.delete(seatId);
+    } else {
+        const member = currentSeating[index];
+        if (member) {
+            const sortedLayout = [...SEAT_LAYOUT].sort((a, b) => a.id - b.id);
+            const freeIndex = sortedLayout.findIndex((s, i) =>
+                i !== index && !currentSeating[i] && !blockedSeats.has(s.id));
+            if (freeIndex === -1) {
+                showToast('No free seat to move this member to', 'danger');
+                return;
+            }
+            currentSeating[freeIndex] = member;
+            currentSeating[index] = null;
+        }
+        blockedSeats.add(seatId);
+    }
+    saveBlocked();
+    renderSeatMap(currentSeatingAsList());
+}
+
+function handleUnblockAll() {
+    blockedSeats = new Set();
+    saveBlocked();
+    renderSeatMap(currentSeatingAsList());
+    showToast('All seats unblocked', 'success');
 }
 
 function toggleSeatLock(seatId, member) {
@@ -329,8 +390,13 @@ function renderSeatMap(memberList) {
         const seatNumBadge = `<div class="seat-number-badge">${seat.label}</div>`;
 
         const locked = isSeatLocked(seat.id);
+        const blocked = blockedSeats.has(seat.id);
+        const blockBtn = `<button type="button" class="seat-block-btn" title="${blocked ? 'Unblock seat' : 'Block seat (keep empty)'}">⛔</button>`;
 
-        if (member) {
+        if (blocked) {
+            seatItem.classList.add('blocked-seat');
+            seatItem.innerHTML = `${seatNumBadge}${blockBtn}<span class="blocked-label">Blocked</span>`;
+        } else if (member) {
             seatItem.style.borderColor = member.teamColor;
             seatItem.style.background = `linear-gradient(135deg, #ffffff, ${member.teamColor}11)`;
             seatItem.draggable = !locked;
@@ -339,13 +405,23 @@ function renderSeatMap(memberList) {
             seatItem.innerHTML = `
                 ${seatNumBadge}
                 <button type="button" class="seat-lock-btn" title="${locked ? 'Unlock seat' : 'Lock seat (keep on randomize)'}">${locked ? '🔒' : '🔓'}</button>
+                ${locked ? '' : blockBtn}
                 <div class="team-dot" style="background-color: ${member.teamColor}; box-shadow: 0 0 5px ${member.teamColor}"></div>
                 <div class="member-name" style="font-size: 0.75rem;">${member.name}</div>
                 <div class="member-role">${member.teamName}</div>
             `;
         } else {
             seatItem.classList.add('empty-seat');
-            seatItem.innerHTML = `${seatNumBadge}<span class="text-muted" style="font-size:0.7em">Empty</span>`;
+            seatItem.innerHTML = `${seatNumBadge}${blockBtn}<span class="text-muted" style="font-size:0.7em">Empty</span>`;
+        }
+
+        const blockBtnEl = seatItem.querySelector('.seat-block-btn');
+        if (blockBtnEl) {
+            blockBtnEl.addEventListener('mousedown', (e) => e.stopPropagation());
+            blockBtnEl.addEventListener('click', (e) => {
+                e.stopPropagation();
+                toggleSeatBlock(seat.id, index);
+            });
         }
 
         const lockBtn = seatItem.querySelector('.seat-lock-btn');
@@ -396,7 +472,8 @@ function attachDragHandlers(seatEl) {
     seatEl.addEventListener('dragover', (e) => {
         if (dragSourceIndex === null) return;
         const targetIndex = parseInt(seatEl.dataset.index);
-        if (targetIndex === dragSourceIndex || seatEl.classList.contains('locked')) return;
+        if (targetIndex === dragSourceIndex || seatEl.classList.contains('locked')
+            || seatEl.classList.contains('blocked-seat')) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         seatEl.classList.add('drag-over');
@@ -414,7 +491,7 @@ function attachDragHandlers(seatEl) {
             ? dragSourceIndex
             : parseInt(e.dataTransfer.getData('text/plain'));
         if (isNaN(sourceIndex) || sourceIndex === targetIndex) return;
-        if (seatEl.classList.contains('locked')) return;
+        if (seatEl.classList.contains('locked') || seatEl.classList.contains('blocked-seat')) return;
         swapSeats(sourceIndex, targetIndex);
     });
 }
@@ -445,7 +522,7 @@ function handleRandomize() {
     btnRandom.textContent = '⏳ Mixing...';
 
     setTimeout(() => {
-        const randomizedList = randomizeSeats(currentMembers, seatLocks);
+        const randomizedList = randomizeAll();
         renderSeatMap(randomizedList);
         btnRandom.disabled = false;
         btnRandom.textContent = origText;
@@ -594,7 +671,7 @@ function handleSaveMember() {
     saveData();
     pruneLocks();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
+    renderSeatMap(randomizeAll());
     renderMembersTable();
     closeModal(memberModalOverlay);
 
@@ -622,7 +699,7 @@ function handleConfirmDelete() {
     saveData();
     pruneLocks();
     renderSidebar();
-    renderSeatMap(randomizeSeats(currentMembers, seatLocks));
+    renderSeatMap(randomizeAll());
     renderMembersTable();
     closeModal(deleteConfirmOverlay);
 

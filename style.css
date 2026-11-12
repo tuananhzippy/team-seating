@@ -968,3 +968,35 @@ html[data-auth="denied"] .access-denied {
 .btn[hidden] {
     display: none;
 }
+
+/* ===== Seat block ===== */
+.seat-block-btn {
+    position: absolute;
+    bottom: 1px;
+    left: 2px;
+    padding: 0 2px;
+    border: none;
+    background: transparent;
+    font-size: 0.65rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.seat-item:hover .seat-block-btn,
+.seat-item.blocked-seat .seat-block-btn {
+    opacity: 1;
+}
+
+.seat-item.blocked-seat {
+    cursor: default;
+    border: 1px dashed rgba(220, 53, 69, 0.5);
+    background: repeating-linear-gradient(45deg, rgba(220, 53, 69, 0.06), rgba(220, 53, 69, 0.06) 6px, transparent 6px, transparent 12px);
+}
+
+.blocked-label {
+    font-size: 0.7em;
+    color: rgba(220, 53, 69, 0.8);
+    font-weight: 600;
+}
